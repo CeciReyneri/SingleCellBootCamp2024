@@ -1,28 +1,39 @@
 library(Seurat)
 
 
-#to use Seurat by new v5 assay
+#to use Seurat by new v5 assay, in case you use an object in a previous version, you should specify it. Not necessary in this case.
 
 options(Seurat.object.assay.version = 'v5')
 
 
 #####load and create Seurat object from 10x cellranger count output directory
 
-sample_1 <- Read10X("/Users/simone/Documents/GitHub/wishbone/SingleCellBootCamp2024/Day1/CodeAndData/DRY_Lab/Patient_01/raw_feature_bc_matrix/")
-sample_2 <- Read10X("/Users/simone/Documents/GitHub/wishbone/SingleCellBootCamp2024/Day1/CodeAndData/DRY_Lab/Patient_02/raw_feature_bc_matrix/")
+sample_1 <- Read10X("S:/SingleCellBootCamp2024-main/Day1/CodeAndData/DRY_Lab/Patient_01/raw_feature_bc_matrix")
+sample_2 <- Read10X("S:/SingleCellBootCamp2024-main/Day1/CodeAndData/DRY_Lab/Patient_02/raw_feature_bc_matrix")
 #sample_3 <- Read10X("corso_sc/Patient_03/raw_feature_bc_matrix/")
 
 #if you have a metadata table by cell barcode as row and feature as column can provide by meta.data option
 sample_1 <- CreateSeuratObject(counts = sample_1)
 sample_2 <- CreateSeuratObject(counts = sample_2)
 #sample_3 <- CreateSeuratObject(counts = sample_3)
+#if it's not a new object, but maybe already processed with info about clusters or UMAP, this is metadata that can be added direclty in the function with the metadata argument
+
+#these are two differemt Seurat objects unfiltered (good cells, low quality cells and empty droplets)
+#We will first put them in only one Object and then do WC.
+
+#to check the dimension of the Object:
+ncol(sample_1) #to know the number of cell (which are on the column)
 
 
-#####define Sample variable for each sample
+#####Adding metadata: define Sample variable for each sample 
 sample_1$Sample <- "Patient_1"
 sample_2$Sample <- "Patient_2"
 
-#sample_3$Sample <- "Patient 3"
+sample_1$Condition <- "Control"
+sample_2$Condition <- "Treated"
+
+#check it:
+head(sample_1@meta.data)
 
 
 #####in droplet based single-cell analysis we obtain many empty droplet. 
@@ -30,20 +41,24 @@ sample_2$Sample <- "Patient_2"
 
 seuratList<-list(sample_1,sample_2)
 
-seuratList<- lapply(seuratList,function(x){CalculateBarcodeInflections(x,threshold.high = 10000,threshold.low = 1000)})
-
-pdf("curve_barcode.pdf")
+seuratList<- lapply(seuratList,function(x){CalculateBarcodeInflections(x,threshold.high = 10000,threshold.low = 1000)}) #this orders the cells based on the number of UMI and takes only cells with a certain number of UMI
+#con lapply in realtà la funzione calcola l'inflection point e poi lo aggiunge al seuratList, come info aggiuntiva
 BarcodeInflectionsPlot(seuratList[[1]]) ##dotted line is the inflection point computed in sample_1. 
-dev.off()
-###We should zoom to appreciate the inversion of the curve
 
-seuratList<- lapply(seuratList,SubsetByBarcodeInflections)
+###We should zoom to appreciate the inversion of the curve. So you subset based on the calculated inflection point:
+seuratList<- lapply(seuratList,SubsetByBarcodeInflections) #questo subsetta in base all'inflection point calcolato prima
 
+#then plot it again to see the result of the subsetting
+seuratList<- lapply(seuratList,function(x){CalculateBarcodeInflections(x,threshold.high = 10000,threshold.low = 1000)})
+BarcodeInflectionsPlot(seuratList[[1]]) 
+
+#now the object is smaller
+ncol(seuratList[[1]])
 
 ##compute Mt and ribo percent
 
-seuratList<- lapply(seuratList, function(x){PercentageFeatureSet(x, pattern = "^RP[SL]", col.name = "percent.ribo")})
-seuratList<- lapply(seuratList,function(x){PercentageFeatureSet(x, pattern = "^MT-", col.name = "percent.mito")})
+seuratList<- lapply(seuratList, function(x){PercentageFeatureSet(x, pattern = "^RP[SL]", col.name = "percent.ribo")}) #each gene that starts with RPL or RPS and add a new metadata in the object "percent.ribo" >> a column with how many reads in that cell correspond to ribo
+seuratList<- lapply(seuratList, function(x){PercentageFeatureSet(x, pattern = "^MT-", col.name = "percent.mito")})
 
 #####now let's display some of the most used metrics for qc
 pdf("ViolinPlotRibo.pdf")
@@ -98,12 +113,13 @@ for(i in 1:length(seuratList)){
   seuratList[[i]]<-seuratList[[i]][expressed_genes,]
 }
 
-
+#now it's even smaller 
+ncol(seuratList[[1]])
 
 
 #####merge all filtered sample into one Seurat object  
 
-seuratObj <- merge(seuratList[[1]], c(seuratList[[2]]), add.cell.ids=c("sample_1","sample_2"))
+seuratObj <- merge(seuratList[[1]], c(seuratList[[2]]), add.cell.ids=c("sample_1","sample_2")) #this adds the name sample1 or sample2 to the colname, to the name of each cell.
 
 ##we can remove the 3 objects no longer needed from the environment
 
@@ -118,11 +134,18 @@ seuratObj@assays
 
 #or by function Assays
 
-Assays(seuratObj)
+Assays(seuratObj) #here you could have all layers of assay, such as RNA, ATAC, ADT
 
 ##for the moment only the "RNA" assay is present. You can view the assay in use by
 
 seuratObj@active.assay
+
+#to change the assay you are working on:
+seuratObj@active.assay <- "ATAC"
+
+#ident = identification of the sample, useful for visualization
+seuratObj@active.ident
+idents(seuratObj) <-seuratObj$Sample
 
 ###each array is divided in layers which contained the raw count matrix of the samples
 Layers(seuratObj)
@@ -160,7 +183,7 @@ saveRDS(seuratObj,"QC_seurat_object.rds")
 seuratObj<- readRDS("QC_seurat_object.rds")
 
 ##to save the entire envinroment
-save.image("seurat_analysis.Rda")
+save.image("seurat_analysis.Rda") #this is a bigger file than rds, because it has everything
 
 #to reload the env
 load("seurat_analysis.Rda")
